@@ -1,10 +1,11 @@
 use std::{borrow::Cow, collections::BTreeMap, fmt, pin::Pin};
 
-use aws_sdk_cloudwatch::{config::Region, Client};
+use aws_sdk_cloudwatch::{config::Region, Client as CloudwatchClient};
 use futures_util::{future, FutureExt, Stream};
 
+use crate::collector::CloudwatchRecorder;
 use crate::{
-    collector::{self, CloudWatch, Config, Resolution},
+    collector::{self, Config, Resolution},
     error::Error,
     BoxFuture,
 };
@@ -14,7 +15,7 @@ pub struct Builder {
     default_dimensions: BTreeMap<String, String>,
     storage_resolution: Option<Resolution>,
     send_interval_secs: Option<u64>,
-    client: Box<dyn CloudWatch + Send + Sync>,
+    client: CloudwatchClient,
     shutdown_signal: Option<BoxFuture<'static, ()>>,
     metric_buffer_size: usize,
     force_flush_stream: Option<Pin<Box<dyn Stream<Item = ()> + Send>>>,
@@ -32,24 +33,25 @@ fn extract_namespace(cloudwatch_namespace: Option<String>) -> Result<String, Err
 impl Builder {
     pub async fn new() -> Self {
         let conf = aws_config::load_from_env().await;
-        let client = Client::new(&conf);
+        let client = CloudwatchClient::new(&conf);
         Self::new_with_client(client)
     }
     pub async fn new_with_region(region: impl Into<Cow<'static, str>>) -> Self {
         let region = Region::new(region);
+
         let conf = aws_config::from_env().region(region).load().await;
-        let client = Client::new(&conf);
+        let client = CloudwatchClient::new(&conf);
         Self::new_with_client(client)
     }
 
     #[doc(hidden)]
-    pub fn new_with_client(client: impl CloudWatch + Send + Sync + 'static) -> Self {
+    pub fn new_with_client(client: CloudwatchClient) -> Self {
         Builder {
             cloudwatch_namespace: Default::default(),
             default_dimensions: Default::default(),
             storage_resolution: Default::default(),
             send_interval_secs: Default::default(),
-            client: Box::new(client),
+            client,
             shutdown_signal: Default::default(),
             metric_buffer_size: 2048,
             force_flush_stream: Default::default(),
@@ -99,7 +101,7 @@ impl Builder {
     }
 
     /// Sets the cloudwatch client to be used to send metrics.
-    pub fn client(self, client: Box<dyn CloudWatch + Send + Sync>) -> Self {
+    pub fn client(self, client: CloudwatchClient) -> Self {
         Self { client, ..self }
     }
 
@@ -129,23 +131,32 @@ impl Builder {
     ///
     /// Expects the `metrics::set_boxed_recorder` function as an argument as a safeguard against
     /// accidentally using a different `metrics` version than is used in this crate.
-    pub fn init_thread(
-        self,
-        set_boxed_recorder: fn(Box<dyn metrics::Recorder>) -> Result<(), metrics::SetRecorderError>,
-    ) -> Result<(), Error> {
-        collector::init(set_boxed_recorder, self.build_config()?);
-        Ok(())
+    pub fn init_thread(self) -> Result<CloudwatchRecorder, Error> {
+        // collector::init(self.build_config()?);
+        // Ok(())
+        let (collector, start) = collector::new(self.build_config()?);
+        let _ = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                start.await;
+                /*if let Err(e) = collect.await {
+                    warn!("{}", e);
+                }*/
+            })
+        });
+
+        Ok(collector)
     }
 
     /// Initializes the CloudWatch metrics and returns a Future that must be polled
     ///
     /// Expects the `metrics::set_boxed_recorder` function as an argument as a safeguard against
     /// accidentally using a different `metrics` version than is used in this crate.
-    pub async fn init_future(
-        self,
-        set_boxed_recorder: fn(Box<dyn metrics::Recorder>) -> Result<(), metrics::SetRecorderError>,
-    ) -> Result<(), Error> {
-        collector::init_future(set_boxed_recorder, self.build_config()?).await
+    pub async fn init_future(self) -> Result<(), Error> {
+        collector::init_future(self.build_config()?).await
     }
 
     fn build_config(self) -> Result<Config, Error> {

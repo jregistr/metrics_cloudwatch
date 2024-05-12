@@ -3,20 +3,35 @@
 // False positives on `metrics::Key` which uses interior mutability to cache the hash
 #![allow(clippy::mutable_key_type)]
 
-pub use {builder::Builder, collector::Resolution, error::Error, metrics};
+pub use {builder::Builder, collector::Resolution, error::Error};
 
-use std::{borrow::Cow, future::Future, pin::Pin};
+use std::{future::Future, pin::Pin};
 
 mod builder;
-#[doc(hidden)]
+// #[doc(hidden)]
 pub mod collector;
 mod error;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/*pub fn start_listener(collect_future: impl Future<Output=()> + Sized) {
+    let _ = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async move {
+            collect_future.await;
+            /*if let Err(e) = collect.await {
+                warn!("{}", e);
+            }*/
+        })
+    });
+}*/
+
 // From the CloudWatch docs:
 // Seconds | Microseconds | Milliseconds | Bytes | Kilobytes | Megabytes | Gigabytes | Terabytes | Bits | Kilobits | Megabits | Gigabits | Terabits | Percent | Count | Bytes/Second | Kilobytes/Second | Megabytes/Second | Gigabytes/Second | Terabytes/Second | Bits/Second | Kilobits/Second | Megabits/Second | Gigabits/Second | Terabits/Second | Count/Second | None
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+/*#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Unit {
     Seconds,
     Microseconds,
@@ -91,3 +106,4 @@ impl From<Unit> for metrics::SharedString {
         unit.as_str().into()
     }
 }
+*/
